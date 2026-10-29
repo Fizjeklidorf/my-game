@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Engine Version** | Unreal Engine 5.8 |
-| **Installed at pin time** | NOT DETERMINED — `/setup-engine` §3 probes the installed editor and records the result here. |
+| **Installed at pin time** | Unreal Engine 5.8 (user-reported, Windows, 2026-10-29; the setup ran in a cloud container that could not probe the editor, and the exact 5.8.x hotfix was not reported) |
 | **Release Date** | June 2026 (5.8.0); latest hotfix 5.8.3, September 2026 |
 | **Project Pinned** | 2026-10-17 |
 | **Last Docs Verified** | 2026-10-17 (release timeline, 5.8 release notes, and the 5.8 changes recorded in this directory); 2026-02-13 (rest of directory, written against 5.7) |
