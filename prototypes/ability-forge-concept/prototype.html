@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<!-- PROTOTYPE - NOT FOR PRODUCTION -->
+<!-- Question: Does building abilities from parts in the Forge feel like inventing, so players keep returning to tweak them? -->
+<!-- Date: 2026-10-29 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ability Forge Prototype</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #121418; color: #d8dbe2; font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+  #forge { position: absolute; inset: 0; overflow: auto; padding: 16px 20px; }
+  #forge h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: 1px; }
+  #forge h2 { font-size: 15px; margin: 0 0 8px; color: #f0e2b6; }
+  #forge h3 { font-size: 13px; margin: 12px 0 4px; color: #9aa3b2; text-transform: uppercase; letter-spacing: 1px; }
+  .top { display: flex; gap: 20px; align-items: baseline; }
+  .xp { font-size: 18px; color: #ffe9a8; }
+  .muted { color: #7f8796; font-size: 12px; }
+  .cols { display: flex; gap: 16px; margin-top: 10px; align-items: flex-start; }
+  .col { background: #1b1e24; border: 1px solid #2a2f38; border-radius: 6px; padding: 12px; }
+  .c1 { flex: 1.1; } .c2 { flex: 1.3; } .c3 { flex: 0.8; }
+  .ab { display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid #262a33; }
+  .ab canvas { flex: none; border-radius: 4px; }
+  .lv { color: #ffe9a8; font-size: 12px; }
+  label.opt { display: block; padding: 3px 0; cursor: pointer; }
+  label.opt.locked { color: #555c69; cursor: not-allowed; }
+  button { background: #2a2f39; color: #d8dbe2; border: 1px solid #3a404c; border-radius: 4px; padding: 3px 8px; margin: 2px 2px 0 0; cursor: pointer; font-size: 12px; }
+  button:hover:not(:disabled) { border-color: #f0e2b6; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.on { background: #4a3f20; border-color: #f0e2b6; }
+  button.big { font-size: 14px; padding: 7px 12px; margin-top: 6px; width: 100%; }
+  input[type=text] { background: #121418; color: #fff; border: 1px solid #3a404c; padding: 4px 6px; width: 100%; border-radius: 4px; }
+  select { background: #121418; color: #fff; border: 1px solid #3a404c; }
+  #preview { background: #121418; border-radius: 4px; display: block; margin: 8px 0; width: 100%; }
+  .stats { font-variant-numeric: tabular-nums; color: #c9cfda; }
+  .slot { padding: 4px 0; }
+  canvas#c { display: none; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: #1b1e24; cursor: crosshair; }
+  #overlay { display: none; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: #1b1e24ee; border: 1px solid #f0e2b6; border-radius: 8px; padding: 18px 22px; min-width: 360px; max-width: 640px; z-index: 5; }
+  #overlay h2 { margin-top: 0; color: #f0e2b6; }
+  #tally { display: none; position: absolute; right: 12px; top: 12px; width: 380px; max-height: 90vh; overflow: auto; background: #0e0f12f2; border: 1px solid #555; border-radius: 6px; padding: 12px; z-index: 6; font-size: 12px; }
+  #tally textarea { width: 100%; height: 220px; background: #000; color: #9fe; font: 11px monospace; }
+  #toast { position: absolute; left: 50%; top: 18px; transform: translateX(-50%); color: #7fd8ff; font-size: 18px; z-index: 7; pointer-events: none; text-shadow: 0 0 8px #000; }
+</style>
+</head>
+<body>
+<div id="forge"></div>
+<canvas id="c" width="1000" height="640"></canvas>
+<div id="overlay"></div>
+<div id="tally"></div>
+<div id="toast"></div>
+<script>
+// PROTOTYPE - NOT FOR PRODUCTION
+// Question: Does building abilities from parts in the Forge feel like inventing, so players keep returning to tweak them?
+// Date: 2026-10-29
+
+const C = document.getElementById('c'), X = C.getContext('2d');
+const W = 1000, H = 640;
+const COL = { energy: '#ffe9a8', frost: '#7fd8ff' };
+const RED = '#ff4d3d', AMBER = '#ffb02e';
+const KEYN = ['LMB', 'RMB', 'Q', 'E'];
+
+// Blueprints: shape is fixed per blueprint (visual rule: shape = blueprint, colour = element)
+const BP = {
+  bolt:   { name: 'Bolt',   desc: 'fast line, low damage',            dmg: 12, cost: 8,  cd: 0.22, speed: 660, r: 4,  life: 1.4, kind: 'proj' },
+  ball:   { name: 'Ball',   desc: 'slow sphere, bursts in an area',   dmg: 22, cost: 18, cd: 0.7,  speed: 300, r: 10, life: 2.4, aoe: 70, kind: 'proj' },
+  beam:   { name: 'Beam',   desc: 'instant column, hits everything in line', dmg: 26, cost: 22, cd: 0.9, len: 460, w: 12, kind: 'beam' },
+  shield: { name: 'Shield', desc: 'plane in front of you, blocks shots, burns touch', dmg: 7, cost: 24, cd: 4, dur: 2.6, len: 42, kind: 'shield' }
+};
+
+// ---------- persistent session state ----------
+const S = { xp: 60, forged: 0, abilities: [], slots: [null, null, null, null], frost: false, nextId: 1, wave: 1 };
+const T = { forgeVisits: 0, newForged: 0, reforges: 0, grows: 0, renames: 0, equips: 0, fights: 0, retreats: 0, deaths: 0,
+            bossTries: 0, bossKills: 0, practice: 0, signatures: new Set(), tForge: 0, tFight: 0, log: [], start: performance.now() };
+function clock() { const s = (performance.now() - T.start) / 1000 | 0; return String(s / 60 | 0).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }
+function tlog(m) { T.log.push(clock() + '  ' + m); }
+
+function forgeCost() { return Math.round(15 * Math.pow(1.3, S.forged)); } // escalates exponentially with each new ability
+const REFORGE_COST = 5;
+function growCost(a) { return Math.round(12 * Math.pow(a.level, 1.6)); }
+
+function stats(a) {
+  const b = BP[a.bp];
+  let dmg = b.dmg * (1 + 0.15 * ((a.level || 1) - 1)), cost = b.cost, cd = b.cd;
+  if (a.split) { dmg *= 0.6; cost *= 1.6; }
+  if (a.charge) { cost *= 1.2; cd *= 1.2; }
+  if (a.chain) { cost *= 1.3; }
+  if (a.el === 'frost') { dmg *= 0.85; }
+  return { dmg, cost, cd };
+}
+function sig(a) { return [a.bp, a.split ? 'S' : '-', a.charge ? 'C' : '-', a.chain ? 'K:' + a.chainBp : '-', a.el].join('|'); }
+function recipe(a) {
+  const p = [a.el === 'frost' ? 'Frost' : 'Energy', BP[a.bp].name];
+  if (a.split) p.push('+Split'); if (a.charge) p.push('+Charge'); if (a.chain) p.push('⟶ ' + BP[a.chainBp].name);
+  return p.join(' ');
+}
+function autoName(d) {
+  const parts = [];
+  parts.push(d.el === 'frost' ? 'Frost' : 'Energy');
+  if (d.charge) parts.push('Charged');
+  if (d.split) parts.push('Split');
+  parts.push(BP[d.bp].name);
+  let n = parts.join(' ');
+  if (d.chain) n += ' → ' + BP[d.chainBp].name;
+  return n;
+}
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+// starter ability: a pre-made class's basic attack, built from a blueprint
+S.abilities.push({ id: S.nextId++, name: 'Energy Bolt', bp: 'bolt', split: false, charge: false, chain: false, chainBp: 'ball', el: 'energy', level: 1 });
+S.slots[0] = 1;
+
+function newDraft() { return { editingId: null, bp: 'ball', split: false, charge: false, chain: false, chainBp: 'bolt', el: 'energy', name: '', nameTouched: false }; }
+let draft = newDraft();
+let mode = 'forge';
+
+// ---------- shape drawing (shared by forge icons and arena) ----------
+function glow(ctx, col, blur) { ctx.shadowColor = col; ctx.shadowBlur = blur; }
+function drawShape(ctx, bp, x, y, ang, sc, col) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang); glow(ctx, col, 12); ctx.strokeStyle = col; ctx.fillStyle = col;
+  if (bp === 'bolt') { ctx.lineWidth = 3 * sc; ctx.beginPath(); ctx.moveTo(-14 * sc, 0); ctx.lineTo(10 * sc, 0); ctx.stroke(); }
+  else if (bp === 'ball') { ctx.beginPath(); ctx.arc(0, 0, 9 * sc, 0, 7); ctx.fill(); }
+  else if (bp === 'beam') { ctx.globalAlpha = 0.85; ctx.fillRect(0, -4 * sc, 54 * sc, 8 * sc); }
+  else if (bp === 'shield') { ctx.lineWidth = 5 * sc; ctx.beginPath(); ctx.moveTo(0, -16 * sc); ctx.lineTo(0, 16 * sc); ctx.stroke(); }
+  ctx.restore();
+}
+function drawIcon(ctx, a, w, h) {
+  ctx.clearRect(0, 0, w, h); ctx.fillStyle = '#121418'; ctx.fillRect(0, 0, w, h);
+  const col = COL[a.el], sc = Math.min(w / 120, h / 50) * (w > 200 ? 1.4 : 1);
+  const ox = w * 0.18, oy = h / 2, mainX = a.chain ? w * 0.36 : w * 0.45;
+  if (a.charge) { ctx.save(); glow(ctx, col, 8); ctx.strokeStyle = col; for (let i = 1; i <= 3; i++) { ctx.globalAlpha = 0.5 / i; ctx.beginPath(); ctx.arc(ox, oy, 6 * i * sc, 0, 7); ctx.stroke(); } ctx.restore(); }
+  const angs = a.split ? (a.bp === 'shield' ? [0, 2.09, 4.19] : [-0.35, 0, 0.35]) : [0];
+  for (const g of angs) {
+    if (a.bp === 'shield' && a.split) drawShape(ctx, 'shield', mainX + Math.cos(g) * 16 * sc, oy + Math.sin(g) * 16 * sc, g, sc * 0.7, col);
+    else drawShape(ctx, a.bp, mainX + Math.cos(g) * 8 * sc - 8 * sc, oy + Math.sin(g) * 22 * sc, g, sc, col);
+  }
+  if (a.chain) {
+    ctx.save(); ctx.strokeStyle = '#9aa3b2'; ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(w * 0.58, oy); ctx.lineTo(w * 0.74, oy); ctx.stroke(); ctx.restore();
+    drawShape(ctx, a.chainBp, w * 0.84, oy, 0, sc * 0.7, col);
+  }
+}
+
+// ---------- forge UI ----------
+function nameOf(id) { const a = S.abilities.find(x => x.id === id); return a ? a.name : '?'; }
+function renderForge() {
+  const d = draft;
+  if (!d.nameTouched) d.name = autoName(d);
+  const st = stats({ ...d, level: d.editingId ? S.abilities.find(a => a.id === d.editingId).level : 1 });
+  const radio = (grp, val, label, locked) =>
+    `<label class="opt ${locked ? 'locked' : ''}"><input type="radio" name="${grp}" ${d[grp] === val ? 'checked' : ''} ${locked ? 'disabled' : ''} onchange="setDraft('${grp}','${val}')"> ${label}</label>`;
+  const check = (k, label) => `<label class="opt"><input type="checkbox" ${d[k] ? 'checked' : ''} onchange="setDraft('${k}',this.checked)"> ${label}</label>`;
+  const fc = forgeCost();
+  const action = d.editingId
+    ? `<button class="big" onclick="saveEdit()" ${S.xp < REFORGE_COST ? 'disabled' : ''}>Save changes (${REFORGE_COST} XP)</button><button class="big" onclick="cancelEdit()">Stop editing</button>`
+    : `<button class="big" onclick="forgeNew()" ${S.xp < fc ? 'disabled' : ''}>Forge new ability (${fc} XP)</button>`;
+  document.getElementById('forge').innerHTML = `
+  <div class="top"><h1>THE FORGE</h1><span class="xp">XP ${S.xp | 0}</span>
+    <span class="muted">New abilities cost more each time you forge one. Editing an existing one is cheap. Take as long as you like.</span></div>
+  <div class="cols">
+    <div class="col c1"><h2>Your abilities</h2>
+      ${S.abilities.map(a => `<div class="ab"><canvas class="icon" data-id="${a.id}" width="120" height="50"></canvas>
+        <div><b>${esc(a.name)}</b> <span class="lv">Lv ${a.level}</span><br><span class="muted">${recipe(a)}</span><br>
+        <button onclick="editAb(${a.id})">Edit</button>
+        <button onclick="grow(${a.id})" ${S.xp < growCost(a) ? 'disabled' : ''}>Grow +15% (${growCost(a)} XP)</button><br>
+        Equip: ${[0, 1, 2, 3].map(i => `<button class="${S.slots[i] === a.id ? 'on' : ''}" onclick="equip(${a.id},${i})">${KEYN[i]}</button>`).join('')}
+        </div></div>`).join('')}
+    </div>
+    <div class="col c2"><h2>${d.editingId ? 'Editing: ' + esc(nameOf(d.editingId)) : 'Blueprint table: new ability'}</h2>
+      <h3>Blueprint</h3>${Object.keys(BP).map(k => radio('bp', k, `<b>${BP[k].name}</b>: <span class="muted">${BP[k].desc}</span>`)).join('')}
+      <h3>Alterations</h3>
+      ${check('split', 'Split: three at once, each weaker')}
+      ${check('charge', 'Charge: hold to power up, release to cast')}
+      ${check('chain', 'Chain: on hit, a second stage fires from the impact point')}
+      <div style="margin-left:22px">Second stage: <select onchange="setDraft('chainBp',this.value)" ${d.chain ? '' : 'disabled'}>
+        ${['bolt', 'ball', 'beam'].map(k => `<option value="${k}" ${d.chainBp === k ? 'selected' : ''}>${BP[k].name}</option>`).join('')}</select></div>
+      <h3>Element</h3>
+      ${radio('el', 'energy', 'Energy: neutral white-gold')}
+      ${radio('el', 'frost', S.frost ? 'Frost: slows what it hits, slightly less damage' : 'Frost: undiscovered (an elite enemy carries a shard)', !S.frost)}
+      <canvas id="preview" width="420" height="110"></canvas>
+      <div class="stats">Damage ${st.dmg.toFixed(1)}${d.split ? ' ×3' : ''}${d.charge ? ' (up to ×2.5 charged)' : ''}${d.chain ? ' + stage' : ''} · Energy ${st.cost | 0} · Cooldown ${st.cd.toFixed(2)}s</div>
+      <h3>Name</h3><input type="text" id="nm" value="${esc(d.name)}" oninput="draft.name=this.value;draft.nameTouched=true">
+      ${action}
+    </div>
+    <div class="col c3"><h2>Loadout</h2>
+      ${[0, 1, 2, 3].map(i => `<div class="slot"><b>${KEYN[i]}</b>: ${S.slots[i] ? esc(nameOf(S.slots[i])) : '<span class="muted">empty</span>'}</div>`).join('')}
+      <h2 style="margin-top:14px">Go fight</h2>
+      <button class="big" onclick="startFight('waves')">Waves (next: wave ${S.wave})</button>
+      <button class="big" onclick="startFight('boss')">The Warden (boss)</button>
+      <button class="big" onclick="startFight('practice')">Practice dummy</button>
+      <p class="muted">In a fight: WASD to move, aim with the mouse, LMB / RMB / Q / E to cast. Press F any time to come back here. You keep all XP you earn, even if you fall.</p>
+      <p class="muted">Observer: press L for the session tally.</p>
+    </div>
+  </div>`;
+  document.querySelectorAll('canvas.icon').forEach(cv => drawIcon(cv.getContext('2d'), S.abilities.find(a => a.id === +cv.dataset.id), cv.width, cv.height));
+  const pv = document.getElementById('preview'); drawIcon(pv.getContext('2d'), d, pv.width, pv.height);
+}
+function setDraft(k, v) { draft[k] = v; renderForge(); }
+function forgeNew() {
+  const c = forgeCost(); if (S.xp < c) return;
+  S.xp -= c; S.forged++;
+  const a = { id: S.nextId++, name: draft.name.trim() || autoName(draft), bp: draft.bp, split: draft.split, charge: draft.charge, chain: draft.chain, chainBp: draft.chainBp, el: draft.el, level: 1 };
+  S.abilities.push(a); T.newForged++; T.signatures.add(sig(a));
+  const empty = S.slots.indexOf(null); if (empty >= 0) S.slots[empty] = a.id;
+  tlog(`FORGED "${a.name}" [${recipe(a)}] for ${c} XP`);
+  draft.nameTouched = false; renderForge();
+}
+function editAb(id) {
+  const a = S.abilities.find(x => x.id === id);
+  draft = { editingId: id, bp: a.bp, split: a.split, charge: a.charge, chain: a.chain, chainBp: a.chainBp, el: a.el, name: a.name, nameTouched: true };
+  renderForge();
+}
+function saveEdit() {
+  if (S.xp < REFORGE_COST) return;
+  const a = S.abilities.find(x => x.id === draft.editingId);
+  const before = recipe(a), oldName = a.name;
+  Object.assign(a, { bp: draft.bp, split: draft.split, charge: draft.charge, chain: draft.chain, chainBp: draft.chainBp, el: draft.el, name: draft.name.trim() || autoName(draft) });
+  S.xp -= REFORGE_COST; T.reforges++; T.signatures.add(sig(a));
+  if (a.name !== oldName) T.renames++;
+  tlog(`REFORGED "${oldName}" [${before}] -> "${a.name}" [${recipe(a)}]`);
+  draft = newDraft(); renderForge();
+}
+function cancelEdit() { draft = newDraft(); renderForge(); }
+function grow(id) {
+  const a = S.abilities.find(x => x.id === id), c = growCost(a); if (S.xp < c) return;
+  S.xp -= c; a.level++; T.grows++; tlog(`GREW "${a.name}" to Lv ${a.level} for ${c} XP`); renderForge();
+}
+function equip(id, i) { S.slots[i] = S.slots[i] === id ? null : id; T.equips++; tlog(`EQUIP ${KEYN[i]} = ${S.slots[i] ? nameOf(id) : 'empty'}`); renderForge(); }
+
+// ---------- fight state ----------
+let P, enemies, shots, eshots, fx, nums, shields, pickups, keys = {}, mouse = { x: W / 2, y: H / 2, b: [false, false] }, fightMode, paused, cds, charging, dps;
+function startFight(m) {
+  if (!S.slots.some(s => s)) { toast('Equip an ability first'); return; }
+  fightMode = m; mode = 'fight'; paused = false; T.fights++;
+  if (m === 'boss') T.bossTries++; if (m === 'practice') T.practice++;
+  tlog(`FIGHT ${m === 'waves' ? 'wave ' + S.wave : m} with [${S.slots.map((s, i) => KEYN[i] + ':' + (s ? nameOf(s) : '-')).join(', ')}]`);
+  P = { x: W / 2, y: H / 2 + 120, r: 12, hp: 100, maxhp: 100, en: 100, lastHit: '', flash: 0 };
+  enemies = []; shots = []; eshots = []; fx = []; nums = []; shields = []; pickups = []; cds = [0, 0, 0, 0]; charging = [null, null, null, null]; dps = [];
+  if (m === 'waves') spawnWave(S.wave);
+  else if (m === 'boss') enemies.push(mkEnemy('boss', W / 2, 140));
+  else enemies.push(mkEnemy('dummy', W / 2, 200));
+  document.getElementById('forge').style.display = 'none'; C.style.display = 'block'; hideOverlay();
+}
+function backToForge(reason) {
+  mode = 'forge'; T.forgeVisits++; if (reason === 'retreat') T.retreats++;
+  tlog(`BACK TO FORGE (${reason})`);
+  C.style.display = 'none'; document.getElementById('forge').style.display = 'block'; hideOverlay(); renderForge();
+}
+const ET = {
+  grunt:   { r: 14, hp: 40,   spd: 95, xp: 4,  col: '#7d828c', reach: 34, tell: 0.55, dmg: 12, label: 'Grunt lunge (red flash)' },
+  spitter: { r: 12, hp: 32,   spd: 75, xp: 6,  col: '#8c8678', tell: 0.8, dmg: 9, label: 'Spitter shot (amber flash)' },
+  elite:   { r: 22, hp: 240,  spd: 80, xp: 25, col: '#9a8f7a', reach: 70, tell: 0.75, dmg: 20, label: 'Elite slam (red ring)' },
+  boss:    { r: 38, hp: 1500, spd: 55, xp: 200, col: '#76708a', label: 'The Warden' },
+  dummy:   { r: 26, hp: 1e9,  spd: 0, xp: 0,  col: '#5d636e', label: 'dummy' }
+};
+function mkEnemy(t, x, y) { const d = ET[t]; return { t, x, y, r: d.r, hp: d.hp, maxhp: d.hp, state: 'move', st: 0, cd: 1 + Math.random(), slow: 0, flash: 0, pat: 0 }; }
+function spawnWave(n) {
+  const edge = () => { const s = Math.random() * 4 | 0, r = Math.random(); return s === 0 ? [r * W, 20] : s === 1 ? [r * W, H - 20] : s === 2 ? [20, r * H] : [W - 20, r * H]; };
+  for (let i = 0; i < 2 + n; i++) enemies.push(mkEnemy('grunt', ...edge()));
+  for (let i = 0; i < Math.floor(n / 2) + (n > 1 ? 1 : 0); i++) enemies.push(mkEnemy('spitter', ...edge()));
+  if (n === 2 || n % 3 === 0) enemies.push(mkEnemy('elite', ...edge()));
+}
+
+// ---------- casting ----------
+function aimAng() { return Math.atan2(mouse.y - P.y, mouse.x - P.x); }
+function nearestEnemy(x, y, ex) { let b = null, bd = 1e9; for (const e of enemies) { if (e === ex || e.hp <= 0) continue; const d = Math.hypot(e.x - x, e.y - y); if (d < bd) { bd = d; b = e; } } return b; }
+function fire(a, x, y, ang, mult, isStage) {
+  const b = BP[a.bp], st = stats(a), dmg = st.dmg * mult, sc = Math.min(1 + (mult - 1) * 0.6, 2.2);
+  const angs = a.split ? [-0.22, 0, 0.22] : [0];
+  if (b.kind === 'proj') {
+    for (const g of angs) shots.push({ a, x, y, vx: Math.cos(ang + g) * b.speed, vy: Math.sin(ang + g) * b.speed, r: b.r * sc, dmg, life: b.life, stage: isStage, sc });
+  } else if (b.kind === 'beam') {
+    for (const g of angs) {
+      const A = ang + (a.split ? g * 1.15 : 0), x2 = x + Math.cos(A) * b.len, y2 = y + Math.sin(A) * b.len, w = b.w * sc;
+      fx.push({ k: 'beam', x, y, x2, y2, w, col: COL[a.el], t: 0.18, T: 0.18 });
+      let first = null, ft = 2;
+      for (const e of enemies) {
+        if (e.hp <= 0 || segDist(e.x, e.y, x, y, x2, y2) > w / 2 + e.r) continue;
+        hit(e, dmg, a.el);
+        const tt = ((e.x - x) * (x2 - x) + (e.y - y) * (y2 - y)) / (b.len * b.len); if (tt < ft) { ft = tt; first = e; }
+      }
+      if (first && a.chain && !isStage) stage(a, first.x, first.y, mult, first);
+    }
+  } else if (b.kind === 'shield') {
+    shields.push({ a, t: b.dur, offs: a.split ? [0, 2.094, 4.189] : [0], tick: 0, dmg, sc, base: ang });
+  }
+}
+function stage(a, x, y, mult, exclude) {
+  const sa = { bp: a.chainBp, el: a.el, level: a.level, split: false, charge: false, chain: false };
+  const tg = nearestEnemy(x, y, exclude);
+  const ang = tg ? Math.atan2(tg.y - y, tg.x - x) : Math.random() * 6.283;
+  fire(sa, x, y, ang, mult * 0.7, true);
+  fx.push({ k: 'ring', x, y, r: 6, R: 22, col: COL[a.el], t: 0.2, T: 0.2 });
+}
+function tryCast(i, mult) {
+  const id = S.slots[i]; if (!id || cds[i] > 0) return false;
+  const a = S.abilities.find(x => x.id === id), st = stats(a), cost = st.cost * (a.charge ? (0.6 + 0.4 * mult) : 1);
+  if (P.en < cost) { nums.push({ x: P.x, y: P.y - 24, v: 'no energy', t: 0.5, col: '#8a93a3' }); cds[i] = 0.2; return false; }
+  P.en -= cost; cds[i] = st.cd;
+  fire(a, P.x + Math.cos(aimAng()) * 16, P.y + Math.sin(aimAng()) * 16, aimAng(), mult, false);
+  return true;
+}
+function hit(e, d, el) {
+  if (e.hp <= 0) return;
+  e.hp -= d; e.flash = 0.08; if (el === 'frost') e.slow = 2;
+  nums.push({ x: e.x + (Math.random() * 16 - 8), y: e.y - e.r, v: Math.round(d), t: 0.7, col: COL[el] });
+  if (e.t === 'dummy') dps.push([performance.now(), d]);
+  if (e.hp <= 0) kill(e);
+}
+function kill(e) {
+  S.xp += ET[e.t].xp; nums.push({ x: e.x, y: e.y - 30, v: '+' + ET[e.t].xp + ' XP', t: 1.0, col: '#ffe9a8' });
+  if ((e.t === 'elite' || e.t === 'boss') && !S.frost && !pickups.length) { pickups.push({ x: e.x, y: e.y, k: 'frost' }); toast('Something glows where it fell. Walk over it.'); }
+  if (e.t === 'boss') { T.bossKills++; tlog('BOSS DEFEATED'); }
+}
+function hurt(d, src) {
+  P.hp -= d; P.flash = 0.2; P.lastHit = src;
+  nums.push({ x: P.x, y: P.y - 20, v: '-' + d, t: 0.7, col: RED });
+  if (P.hp <= 0 && !paused) {
+    T.deaths++; tlog(`DIED to ${src}`); paused = true;
+    showOverlay(`<h2>You fell</h2><p>Last hit: <b>${esc(src)}</b>. Every attack lights up before it lands; that light is the cue to move or block.</p>
+      <p>You keep all the XP you earned this fight (now ${S.xp | 0}).</p><button class="big" onclick="backToForge('death')">Back to the Forge</button>`);
+  }
+}
+function segDist(px, py, x1, y1, x2, y2) { const dx = x2 - x1, dy = y2 - y1, l = dx * dx + dy * dy; let t = l ? ((px - x1) * dx + (py - y1) * dy) / l : 0; t = Math.max(0, Math.min(1, t)); return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy)); }
+
+// ---------- update ----------
+function update(dt) {
+  // movement
+  let mx = (keys.d ? 1 : 0) - (keys.a ? 1 : 0), my = (keys.s ? 1 : 0) - (keys.w ? 1 : 0); const ml = Math.hypot(mx, my) || 1;
+  P.x = Math.max(P.r, Math.min(W - P.r, P.x + mx / ml * 210 * dt)); P.y = Math.max(P.r, Math.min(H - P.r, P.y + my / ml * 210 * dt));
+  P.en = Math.min(100, P.en + 20 * dt); P.flash -= dt;
+  // casting: LMB/RMB/Q/E
+  const held = [mouse.b[0], mouse.b[1], !!keys.q, !!keys.e];
+  for (let i = 0; i < 4; i++) {
+    cds[i] = Math.max(0, cds[i] - dt);
+    const id = S.slots[i]; if (!id) continue;
+    const a = S.abilities.find(x => x.id === id);
+    if (a.charge) {
+      if (held[i] && charging[i] === null && cds[i] <= 0) charging[i] = 0;
+      if (held[i] && charging[i] !== null) charging[i] = Math.min(1, charging[i] + dt);
+      if (!held[i] && charging[i] !== null) { tryCast(i, 1 + 1.5 * charging[i]); charging[i] = null; }
+    } else if (held[i]) tryCast(i, 1);
+  }
+  // player shots
+  for (const s of shots) {
+    s.x += s.vx * dt; s.y += s.vy * dt; s.life -= dt;
+    if (s.x < -20 || s.x > W + 20 || s.y < -20 || s.y > H + 20) s.life = 0;
+    if (s.life <= 0) { if (BP[s.a.bp].aoe) burst(s); continue; }
+    for (const e of enemies) {
+      if (e.hp <= 0 || Math.hypot(e.x - s.x, e.y - s.y) > e.r + s.r) continue;
+      if (BP[s.a.bp].aoe) burst(s, e);
+      else { hit(e, s.dmg, s.a.el); if (s.a.chain && !s.stage) stage(s.a, s.x, s.y, s.dmg / stats(s.a).dmg, e); }
+      s.life = 0; break;
+    }
+  }
+  shots = shots.filter(s => s.life > 0);
+  // shields
+  const ang = aimAng();
+  for (const sh of shields) {
+    sh.t -= dt; sh.tick -= dt; const L = BP.shield.len * sh.sc;
+    for (const o of sh.offs) {
+      const A = ang + o, cx = P.x + Math.cos(A) * 34, cy = P.y + Math.sin(A) * 34, px = -Math.sin(A) * L, py = Math.cos(A) * L;
+      sh.seg = sh.seg || []; const seg = [cx - px, cy - py, cx + px, cy + py];
+      for (const b of eshots) if (b.life > 0 && segDist(b.x, b.y, ...seg) < b.r + 5) {
+        b.life = 0; fx.push({ k: 'ring', x: b.x, y: b.y, r: 4, R: 16, col: COL[sh.a.el], t: 0.15, T: 0.15 });
+        if (sh.a.chain) stage(sh.a, b.x, b.y, 1, null);
+      }
+      if (sh.tick <= 0) for (const e of enemies) if (e.hp > 0 && segDist(e.x, e.y, ...seg) < e.r + 6) hit(e, sh.dmg, sh.a.el);
+    }
+    if (sh.tick <= 0) sh.tick = 0.3;
+  }
+  shields = shields.filter(s => s.t > 0);
+  // enemies
+  for (const e of enemies) {
+    if (e.hp <= 0) continue;
+    const d = ET[e.t], dist = Math.hypot(P.x - e.x, P.y - e.y), sp = d.spd * (e.slow > 0 ? 0.55 : 1) * dt, ax = (P.x - e.x) / (dist || 1), ay = (P.y - e.y) / (dist || 1);
+    e.slow -= dt; e.flash -= dt; e.cd -= dt;
+    const tellScale = e.slow > 0 ? 1.25 : 1;
+    if (e.t === 'grunt' || e.t === 'elite') {
+      if (e.state === 'move') { if (dist > d.reach * 0.7) { e.x += ax * sp; e.y += ay * sp; } if (dist < d.reach + P.r + 6 && e.cd <= 0) { e.state = 'tell'; e.st = d.tell * tellScale; } }
+      else if (e.state === 'tell') { e.st -= dt; if (e.st <= 0) { if (dist < d.reach + P.r + 8) hurt(d.dmg, d.label); e.state = 'move'; e.cd = 1.1; fx.push({ k: 'ring', x: e.x, y: e.y, r: e.r, R: d.reach + 10, col: RED, t: 0.15, T: 0.15 }); } }
+    } else if (e.t === 'spitter') {
+      if (e.state === 'move') { const k = dist < 220 ? -1 : dist > 320 ? 1 : 0; e.x += ax * sp * k; e.y += ay * sp * k; if (e.cd <= 0) { e.state = 'tell'; e.st = d.tell * tellScale; } }
+      else if (e.state === 'tell') { e.st -= dt; if (e.st <= 0) { eshots.push({ x: e.x, y: e.y, vx: ax * 260, vy: ay * 260, r: 6, dmg: d.dmg, src: d.label, life: 4 }); e.state = 'move'; e.cd = 2.4; } }
+    } else if (e.t === 'boss') bossAI(e, dt, dist, ax, ay, sp, tellScale);
+    e.x = Math.max(e.r, Math.min(W - e.r, e.x)); e.y = Math.max(e.r, Math.min(H - e.r, e.y));
+  }
+  // separation so enemies do not stack
+  for (let i = 0; i < enemies.length; i++) for (let j = i + 1; j < enemies.length; j++) {
+    const a = enemies[i], b = enemies[j]; if (a.hp <= 0 || b.hp <= 0 || a.state === 'dash' || b.state === 'dash') continue;
+    const dx = b.x - a.x, dy = b.y - a.y, dd = Math.hypot(dx, dy) || 1, ov = a.r + b.r - dd;
+    if (ov > 0) { a.x -= dx / dd * ov / 2; a.y -= dy / dd * ov / 2; b.x += dx / dd * ov / 2; b.y += dy / dd * ov / 2; }
+  }
+  enemies = enemies.filter(e => e.hp > 0);
+  // enemy shots
+  for (const b of eshots) { b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt; if (b.life > 0 && Math.hypot(b.x - P.x, b.y - P.y) < b.r + P.r) { b.life = 0; hurt(b.dmg, b.src); } }
+  eshots = eshots.filter(b => b.life > 0 && b.x > -20 && b.x < W + 20 && b.y > -20 && b.y < H + 20);
+  // pickups
+  for (const p of pickups) if (!p.got && Math.hypot(p.x - P.x, p.y - P.y) < 24) {
+    p.got = true; S.frost = true; tlog('DISCOVERED Frost'); toast('Discovered: FROST. It is now on the Forge\'s element list.');
+  }
+  pickups = pickups.filter(p => !p.got);
+  for (const f of fx) f.t -= dt; fx = fx.filter(f => f.t > 0);
+  for (const n of nums) { n.t -= dt; n.y -= 30 * dt; } nums = nums.filter(n => n.t > 0);
+  // win conditions
+  if (fightMode === 'waves' && enemies.length === 0 && !paused && pickups.length === 0) {
+    const bonus = 10 * S.wave; S.xp += bonus; tlog(`WAVE ${S.wave} cleared (+${bonus} XP)`); S.wave++; paused = true;
+    showOverlay(`<h2>Wave ${S.wave - 1} cleared</h2><p>+${bonus} XP bonus. You have ${S.xp | 0} XP.</p>
+      <button class="big" onclick="nextWave()">Keep going: wave ${S.wave} (C)</button><button class="big" onclick="backToForge('wave cleared')">Back to the Forge (F)</button>`);
+  }
+  if (fightMode === 'boss' && enemies.length === 0 && !paused && pickups.length === 0) {
+    paused = true; showOverlay(`<h2>The Warden falls</h2><p>Your build held. You have ${S.xp | 0} XP.</p><button class="big" onclick="backToForge('boss defeated')">Back to the Forge</button>`);
+  }
+}
+function burst(s, direct) {
+  const R = BP.ball.aoe * s.sc; fx.push({ k: 'ring', x: s.x, y: s.y, r: 8, R, col: COL[s.a.el], t: 0.25, T: 0.25 });
+  for (const e of enemies) if (e.hp > 0 && Math.hypot(e.x - s.x, e.y - s.y) < R + e.r) hit(e, s.dmg, s.a.el);
+  if (s.a.chain && !s.stage) stage(s.a, s.x, s.y, s.dmg / stats(s.a).dmg, direct || null);
+}
+function bossAI(e, dt, dist, ax, ay, sp, tellScale) {
+  const enraged = e.hp < e.maxhp / 2, k = (enraged ? 0.82 : 1) * tellScale;
+  if (e.state === 'move') {
+    if (dist > 120) { e.x += ax * sp; e.y += ay * sp; }
+    if (e.cd <= 0) { const p = ['slam', 'volley', 'charge'][e.pat++ % 3]; e.state = p; e.aim = Math.atan2(P.y - e.y, P.x - e.x); e.st = { slam: 1.0, volley: 0.85, charge: 0.9 }[p] * k; e.T = e.st; }
+  } else if (e.state === 'slam') {
+    e.st -= dt; if (e.st <= 0) { if (dist < 150 + P.r) hurt(25, 'Warden slam (red circle)'); fx.push({ k: 'ring', x: e.x, y: e.y, r: 40, R: 150, col: RED, t: 0.2, T: 0.2 }); e.state = 'move'; e.cd = 1.3; }
+  } else if (e.state === 'volley') {
+    e.st -= dt; if (e.st <= 0) { for (let i = -3; i <= 3; i++) { const A = e.aim + i * 0.16; eshots.push({ x: e.x, y: e.y, vx: Math.cos(A) * 300, vy: Math.sin(A) * 300, r: 7, dmg: 12, src: 'Warden volley (amber lines)', life: 4 }); } e.state = 'move'; e.cd = 1.3; }
+  } else if (e.state === 'charge') {
+    e.st -= dt; if (e.st <= 0) { e.state = 'dash'; e.left = 520; e.hitP = false; }
+  } else if (e.state === 'dash') {
+    const step = 900 * dt; e.x += Math.cos(e.aim) * step; e.y += Math.sin(e.aim) * step; e.left -= step;
+    if (!e.hitP && Math.hypot(P.x - e.x, P.y - e.y) < e.r + P.r) { e.hitP = true; hurt(22, 'Warden charge (red lane)'); }
+    if (e.left <= 0 || e.x <= e.r || e.x >= W - e.r || e.y <= e.r || e.y >= H - e.r) { e.state = 'move'; e.cd = 1.6; }
+  }
+}
+function nextWave() { paused = false; hideOverlay(); spawnWave(S.wave); tlog(`CONTINUE to wave ${S.wave}`); }
+
+// ---------- render ----------
+function render() {
+  X.shadowBlur = 0; X.fillStyle = '#1b1e24'; X.fillRect(0, 0, W, H);
+  X.strokeStyle = '#22262e'; X.lineWidth = 1; for (let x = 0; x < W; x += 40) { X.beginPath(); X.moveTo(x, 0); X.lineTo(x, H); X.stroke(); } for (let y = 0; y < H; y += 40) { X.beginPath(); X.moveTo(0, y); X.lineTo(W, y); X.stroke(); }
+  for (const p of pickups) { X.save(); glow(X, COL.frost, 16); X.fillStyle = COL.frost; X.beginPath(); X.moveTo(p.x, p.y - 12); X.lineTo(p.x + 8, p.y); X.lineTo(p.x, p.y + 12); X.lineTo(p.x - 8, p.y); X.fill(); X.restore(); X.fillStyle = '#cfefff'; X.font = '11px sans-serif'; X.fillText('Frost shard', p.x - 26, p.y + 26); }
+  // enemy telegraphs (light before blade)
+  for (const e of enemies) {
+    const d = ET[e.t];
+    if (e.state === 'tell') {
+      const prog = 1 - e.st / (d.tell || 1), col = e.t === 'spitter' ? AMBER : RED;
+      X.save(); glow(X, col, 14); X.strokeStyle = col; X.globalAlpha = 0.4 + 0.6 * prog; X.lineWidth = 3;
+      X.beginPath(); X.arc(e.x, e.y, e.t === 'spitter' ? e.r + 6 : (d.reach + 10) * prog, 0, 7); X.stroke(); X.restore();
+    }
+    if (e.t === 'boss' && ['slam', 'volley', 'charge'].includes(e.state)) {
+      const prog = 1 - e.st / e.T; X.save();
+      if (e.state === 'slam') { X.fillStyle = RED; X.globalAlpha = 0.12 + 0.25 * prog; X.beginPath(); X.arc(e.x, e.y, 150, 0, 7); X.fill(); X.globalAlpha = 0.9; X.strokeStyle = RED; X.lineWidth = 2; X.beginPath(); X.arc(e.x, e.y, 150 * prog, 0, 7); X.stroke(); }
+      if (e.state === 'volley') { X.strokeStyle = AMBER; X.globalAlpha = 0.3 + 0.6 * prog; X.lineWidth = 2; for (let i = -3; i <= 3; i++) { const A = e.aim + i * 0.16; X.beginPath(); X.moveTo(e.x, e.y); X.lineTo(e.x + Math.cos(A) * 600, e.y + Math.sin(A) * 600); X.stroke(); } }
+      if (e.state === 'charge') { X.translate(e.x, e.y); X.rotate(e.aim); X.fillStyle = RED; X.globalAlpha = 0.12 + 0.3 * prog; X.fillRect(0, -e.r, 520, e.r * 2); }
+      X.restore();
+    }
+  }
+  // enemies (muted; danger colour is reserved for telegraphs)
+  for (const e of enemies) {
+    X.fillStyle = e.flash > 0 ? '#fff' : ET[e.t].col; X.beginPath(); X.arc(e.x, e.y, e.r, 0, 7); X.fill();
+    if (e.slow > 0) { X.strokeStyle = COL.frost; X.lineWidth = 2; X.beginPath(); X.arc(e.x, e.y, e.r + 3, 0, 7); X.stroke(); }
+    if (e.t !== 'dummy' && e.hp < e.maxhp) { X.fillStyle = '#000a'; X.fillRect(e.x - e.r, e.y - e.r - 9, e.r * 2, 4); X.fillStyle = '#c9cfda'; X.fillRect(e.x - e.r, e.y - e.r - 9, e.r * 2 * e.hp / e.maxhp, 4); }
+  }
+  if (fightMode === 'boss' && enemies[0]) { const e = enemies[0]; X.fillStyle = '#000a'; X.fillRect(200, 14, 600, 10); X.fillStyle = '#c9cfda'; X.fillRect(200, 14, 600 * e.hp / e.maxhp, 10); X.fillStyle = '#d8dbe2'; X.font = '12px sans-serif'; X.fillText('THE WARDEN' + (e.hp < e.maxhp / 2 ? ' (enraged: faster tells)' : ''), 200, 38); }
+  // player (identity shown as trim colour)
+  X.fillStyle = P.flash > 0 ? RED : '#2c3038'; X.beginPath(); X.arc(P.x, P.y, P.r, 0, 7); X.fill();
+  X.strokeStyle = '#d16bff'; X.lineWidth = 3; X.beginPath(); X.arc(P.x, P.y, P.r, 0, 7); X.stroke();
+  const ang = aimAng(); X.strokeStyle = '#d16bff88'; X.beginPath(); X.moveTo(P.x + Math.cos(ang) * 14, P.y + Math.sin(ang) * 14); X.lineTo(P.x + Math.cos(ang) * 24, P.y + Math.sin(ang) * 24); X.stroke();
+  for (let i = 0; i < 4; i++) if (charging[i] !== null) { const a = S.abilities.find(x => x.id === S.slots[i]); X.save(); glow(X, COL[a.el], 14); X.strokeStyle = COL[a.el]; X.lineWidth = 2; X.beginPath(); X.arc(P.x, P.y, P.r + 6 + 14 * charging[i], 0, 7 * charging[i] / 1.1 + 0.01); X.stroke(); X.restore(); }
+  // shields
+  for (const sh of shields) { const L = BP.shield.len * sh.sc; for (const o of sh.offs) { const A = ang + o, cx = P.x + Math.cos(A) * 34, cy = P.y + Math.sin(A) * 34; X.save(); glow(X, COL[sh.a.el], 14); X.strokeStyle = COL[sh.a.el]; X.globalAlpha = Math.min(1, sh.t * 2); X.lineWidth = 5; X.beginPath(); X.moveTo(cx + Math.sin(A) * L, cy - Math.cos(A) * L); X.lineTo(cx - Math.sin(A) * L, cy + Math.cos(A) * L); X.stroke(); X.restore(); } }
+  // shots
+  for (const s of shots) drawShape(X, s.a.bp, s.x, s.y, Math.atan2(s.vy, s.vx), s.sc * (s.stage ? 0.8 : 1), COL[s.a.el]);
+  for (const b of eshots) { X.save(); glow(X, AMBER, 10); X.fillStyle = AMBER; X.beginPath(); X.arc(b.x, b.y, b.r, 0, 7); X.fill(); X.restore(); }
+  for (const f of fx) {
+    const p = 1 - f.t / f.T; X.save(); glow(X, f.col, 14); X.globalAlpha = 1 - p;
+    if (f.k === 'beam') { X.strokeStyle = f.col; X.lineWidth = f.w * (1 - p * 0.5); X.lineCap = 'round'; X.beginPath(); X.moveTo(f.x, f.y); X.lineTo(f.x2, f.y2); X.stroke(); }
+    else { X.strokeStyle = f.col; X.lineWidth = 3; X.beginPath(); X.arc(f.x, f.y, f.r + (f.R - f.r) * p, 0, 7); X.stroke(); }
+    X.restore();
+  }
+  X.font = 'bold 13px sans-serif'; for (const n of nums) { X.globalAlpha = Math.min(1, n.t * 2); X.fillStyle = n.col; X.fillText(n.v, n.x - 8, n.y); } X.globalAlpha = 1;
+  // HUD
+  X.shadowBlur = 0; X.fillStyle = '#000a'; X.fillRect(10, H - 70, 250, 60);
+  X.fillStyle = '#5a2a2a'; X.fillRect(20, H - 60, 230, 12); X.fillStyle = '#e05a4a'; X.fillRect(20, H - 60, 230 * Math.max(0, Math.min(1, P.hp / P.maxhp)), 12);
+  X.fillStyle = '#4a4430'; X.fillRect(20, H - 40, 230, 12); X.fillStyle = COL.energy; X.fillRect(20, H - 40, 230 * P.en / 100, 12);
+  X.fillStyle = '#d8dbe2'; X.font = '11px sans-serif'; X.fillText('HP', 22, H - 64); X.fillText('ENERGY', 22, H - 44);
+  for (let i = 0; i < 4; i++) {
+    const bx = 280 + i * 150, by = H - 70; X.fillStyle = '#000a'; X.fillRect(bx, by, 140, 60);
+    const id = S.slots[i]; X.fillStyle = '#9aa3b2'; X.font = 'bold 11px sans-serif'; X.fillText(KEYN[i], bx + 6, by + 14);
+    if (id) { const a = S.abilities.find(x => x.id === id); X.fillStyle = COL[a.el]; X.font = '11px sans-serif'; X.fillText(a.name.slice(0, 22), bx + 6, by + 30); X.fillStyle = '#7f8796'; X.fillText(recipe(a).slice(0, 24), bx + 6, by + 46);
+      if (cds[i] > 0) { X.fillStyle = '#0008'; X.fillRect(bx, by, 140 * Math.min(1, cds[i] / stats(a).cd), 60); } }
+  }
+  X.fillStyle = '#ffe9a8'; X.font = '13px sans-serif'; X.fillText(`XP ${S.xp | 0}`, W - 120, H - 50);
+  X.fillStyle = '#9aa3b2'; X.font = '11px sans-serif'; X.fillText('F: back to the Forge', W - 120, H - 32);
+  X.fillText(fightMode === 'waves' ? `Wave ${S.wave}` : fightMode === 'boss' ? 'Boss' : 'Practice', W - 120, H - 16);
+  if (fightMode === 'practice') {
+    const now = performance.now(); dps = dps.filter(d => now - d[0] < 3000); const v = dps.reduce((s, d) => s + d[1], 0) / 3;
+    X.fillStyle = '#d8dbe2'; X.font = '14px sans-serif'; X.fillText(`Damage per second (last 3s): ${v.toFixed(1)}`, W / 2 - 120, 40);
+  }
+}
+
+// ---------- overlay / tally / toast ----------
+function showOverlay(h) { const o = document.getElementById('overlay'); o.innerHTML = h; o.style.display = 'block'; }
+function hideOverlay() { document.getElementById('overlay').style.display = 'none'; }
+let toastT = 0; function toast(m) { const t = document.getElementById('toast'); t.textContent = m; toastT = 3; }
+function renderTally() {
+  const el = document.getElementById('tally'); if (el.style.display !== 'block') return;
+  const txt = [
+    `Session time:          ${clock()}`,
+    `Time in Forge / fight: ${(T.tForge / 60).toFixed(1)} / ${(T.tFight / 60).toFixed(1)} min`,
+    `Returns to Forge:      ${T.forgeVisits} (by choice: ${T.retreats + T.log.filter(l => l.includes('BACK TO FORGE (wave cleared)') || l.includes('(boss defeated)')).length}, after death: ${T.deaths})`,
+    `New abilities forged:  ${T.newForged}`,
+    `Edits (reforges):      ${T.reforges}   renames: ${T.renames}`,
+    `Grows:                 ${T.grows}`,
+    `Distinct recipes made: ${T.signatures.size}`,
+    `Loadout changes:       ${T.equips}`,
+    `Fights entered:        ${T.fights} (boss tries ${T.bossTries}, boss kills ${T.bossKills}, practice ${T.practice})`,
+    `Highest wave reached:  ${S.wave}`,
+    '', 'SIGNAL CHECK (hypothesis):',
+    `  returned to Forge by choice after fighting >= 2: ${T.retreats + T.log.filter(l => /BACK TO FORGE \((wave cleared|boss defeated)\)/.test(l)).length >= 2 ? 'YES' : 'not yet'}`,
+    `  3+ clearly different abilities:                  ${T.signatures.size >= 3 ? 'YES' : 'not yet'}`,
+    `  names an idea they still want to build:          ask them when they stop`,
+    '', 'LOG:', ...T.log
+  ].join('\n');
+  el.innerHTML = `<b>Observer tally</b> <span class="muted">(L to hide; select all and copy for the debrief)</span><textarea readonly>${esc(txt)}</textarea>`;
+}
+
+// ---------- input ----------
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+  if (k === 'l') { const el = document.getElementById('tally'); el.style.display = el.style.display === 'block' ? 'none' : 'block'; renderTally(); return; }
+  if (mode !== 'fight') return;
+  keys[k] = true;
+  if (k === 'f') { if (paused && P.hp <= 0) backToForge('death'); else backToForge(paused ? 'wave cleared' : 'retreat'); }
+  if (k === 'c' && paused && fightMode === 'waves' && P.hp > 0) nextWave();
+});
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+function toCanvas(e) { const r = C.getBoundingClientRect(); return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height }; }
+C.addEventListener('mousemove', e => { const p = toCanvas(e); mouse.x = p.x; mouse.y = p.y; });
+C.addEventListener('mousedown', e => { if (e.button === 0) mouse.b[0] = true; if (e.button === 2) mouse.b[1] = true; });
+addEventListener('mouseup', e => { if (e.button === 0) mouse.b[0] = false; if (e.button === 2) mouse.b[1] = false; });
+C.addEventListener('contextmenu', e => e.preventDefault());
+function fit() { const s = Math.min(innerWidth / W, innerHeight / H, 1.4); C.style.width = W * s + 'px'; C.style.height = H * s + 'px'; }
+addEventListener('resize', fit); fit();
+
+// ---------- loop ----------
+let last = performance.now(), tallyTick = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (mode === 'fight') { T.tFight += dt; if (!paused) update(dt); render(); } else T.tForge += dt;
+  toastT -= dt; if (toastT <= 0) document.getElementById('toast').textContent = '';
+  tallyTick -= dt; if (tallyTick <= 0) { tallyTick = 1; renderTally(); }
+  requestAnimationFrame(loop);
+}
+tlog('SESSION START (starter ability: Energy Bolt)');
+renderForge(); requestAnimationFrame(loop);
+</script>
+</body>
+</html>
