@@ -376,10 +376,10 @@ function update(dt) {
     e.slow -= dt; e.flash -= dt; e.cd -= dt;
     const tellScale = e.slow > 0 ? 1.25 : 1;
     if (e.t === 'grunt' || e.t === 'elite') {
-      if (e.state === 'move') { if (dist > d.reach * 0.7) { e.x += ax * sp; e.y += ay * sp; } if (dist < d.reach + P.r + 6 && e.cd <= 0) { e.state = 'tell'; e.st = d.tell * tellScale; } }
+      if (e.state === 'move') { if (dist > d.reach * 0.7) { e.x += ax * sp; e.y += ay * sp; } if (dist < d.reach + P.r + 6 && e.cd <= 0) { e.state = 'tell'; e.st = e.T = d.tell * tellScale; } }
       else if (e.state === 'tell') { e.st -= dt; if (e.st <= 0) { if (dist < d.reach + P.r + 8) hurt(d.dmg, d.label); e.state = 'move'; e.cd = 1.1; fx.push({ k: 'ring', x: e.x, y: e.y, r: e.r, R: d.reach + 10, col: RED, t: 0.15, T: 0.15 }); } }
     } else if (e.t === 'spitter') {
-      if (e.state === 'move') { const k = dist < 220 ? -1 : dist > 320 ? 1 : 0; e.x += ax * sp * k; e.y += ay * sp * k; if (e.cd <= 0) { e.state = 'tell'; e.st = d.tell * tellScale; } }
+      if (e.state === 'move') { const k = dist < 220 ? -1 : dist > 320 ? 1 : 0; e.x += ax * sp * k; e.y += ay * sp * k; if (e.cd <= 0) { e.state = 'tell'; e.st = e.T = d.tell * tellScale; } }
       else if (e.state === 'tell') { e.st -= dt; if (e.st <= 0) { eshots.push({ x: e.x, y: e.y, vx: ax * 260, vy: ay * 260, r: 6, dmg: d.dmg, src: d.label, life: 4 }); e.state = 'move'; e.cd = 2.4; } }
     } else if (e.t === 'boss') bossAI(e, dt, dist, ax, ay, sp, tellScale);
     e.x = Math.max(e.r, Math.min(W - e.r, e.x)); e.y = Math.max(e.r, Math.min(H - e.r, e.y));
@@ -444,12 +444,12 @@ function render() {
   for (const e of enemies) {
     const d = ET[e.t];
     if (e.state === 'tell') {
-      const prog = 1 - e.st / (d.tell || 1), col = e.t === 'spitter' ? AMBER : RED;
+      const prog = Math.max(0, Math.min(1, 1 - e.st / (e.T || d.tell || 1))), col = e.t === 'spitter' ? AMBER : RED;
       X.save(); glow(X, col, 14); X.strokeStyle = col; X.globalAlpha = 0.4 + 0.6 * prog; X.lineWidth = 3;
       X.beginPath(); X.arc(e.x, e.y, e.t === 'spitter' ? e.r + 6 : (d.reach + 10) * prog, 0, 7); X.stroke(); X.restore();
     }
     if (e.t === 'boss' && ['slam', 'volley', 'charge'].includes(e.state)) {
-      const prog = 1 - e.st / e.T; X.save();
+      const prog = Math.max(0, Math.min(1, 1 - e.st / e.T)); X.save();
       if (e.state === 'slam') { X.fillStyle = RED; X.globalAlpha = 0.12 + 0.25 * prog; X.beginPath(); X.arc(e.x, e.y, 150, 0, 7); X.fill(); X.globalAlpha = 0.9; X.strokeStyle = RED; X.lineWidth = 2; X.beginPath(); X.arc(e.x, e.y, 150 * prog, 0, 7); X.stroke(); }
       if (e.state === 'volley') { X.strokeStyle = AMBER; X.globalAlpha = 0.3 + 0.6 * prog; X.lineWidth = 2; for (let i = -3; i <= 3; i++) { const A = e.aim + i * 0.16; X.beginPath(); X.moveTo(e.x, e.y); X.lineTo(e.x + Math.cos(A) * 600, e.y + Math.sin(A) * 600); X.stroke(); } }
       if (e.state === 'charge') { X.translate(e.x, e.y); X.rotate(e.aim); X.fillStyle = RED; X.globalAlpha = 0.12 + 0.3 * prog; X.fillRect(0, -e.r, 520, e.r * 2); }
@@ -549,7 +549,8 @@ addEventListener('resize', fit); fit();
 let last = performance.now(), tallyTick = 0;
 function loop(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (mode === 'fight') { T.tFight += dt; if (!paused) update(dt); render(); } else T.tForge += dt;
+  try { if (mode === 'fight') { T.tFight += dt; if (!paused) update(dt); render(); } else T.tForge += dt; }
+  catch (err) { console.error(err); if (!T.log.some(l => l.includes('ERROR'))) tlog('ERROR ' + err.message); X.setTransform(1, 0, 0, 1, 0, 0); X.globalAlpha = 1; X.shadowBlur = 0; }
   toastT -= dt; if (toastT <= 0) document.getElementById('toast').textContent = '';
   tallyTick -= dt; if (tallyTick <= 0) { tallyTick = 1; renderTally(); }
   requestAnimationFrame(loop);
